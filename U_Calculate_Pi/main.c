@@ -1,11 +1,11 @@
 /*
  * U_Calculate_Pi.c
  *
- * Created: 20.03.2018 18:32:07
- * Author : chaos
+ * Created: 28.09.2021 19:25:00
+ * Author : Yves
  */ 
 
-//#include <avr/io.h>
+#include <stdio.h>
 #include "avr_compiler.h"
 #include "pmic_driver.h"
 #include "TC_driver.h"
@@ -26,49 +26,67 @@
 #include "errorHandler.h"
 #include "NHD0420Driver.h"
 
+#include "rtos_buttonhandler.h"
 
-extern void vApplicationIdleHook( void );
-void vLedBlink(void *pvParameters);
+#define EG_START_CALC 0x01
+#define EG_STOP_CALC  0x02
+#define EG_RESET_CALC 0x04
+#define EG_S1_PRESSED 0x08
 
-TaskHandle_t ledTask;
+typedef enum {
+	State_Started,
+	State_Stopped
+} State_e;
 
-void vApplicationIdleHook( void )
-{	
-	
-}
+typedef enum {
+	LEIBNIZ,
+	NILAKANTHA,
+} Algorithm_e;
 
-int main(void)
-{
-    resetReason_t reason = getResetReason();
+EventGroupHandle_t eventGroup;
+Algorithm_e algorithm = LEIBNIZ;
+TaskHandle_t calculationHandle;
+State_e state = State_Stopped;
 
+float pi4;
+
+extern void vApplicationIdleHook(void);
+void vCalculateLeibniz(void *pvParameters);
+void vCalculateNilakantha(void *pvParameters);
+
+void vApplicationIdleHook(void) {}
+
+int main(void) {
 	vInitClock();
 	vInitDisplay();
 	
-	xTaskCreate( vLedBlink, (const char *) "ledBlink", configMINIMAL_STACK_SIZE+10, NULL, 1, &ledTask);
-
-	vDisplayClear();
-	vDisplayWriteStringAtPos(0,0,"FreeRTOS 10.0.1");
-	vDisplayWriteStringAtPos(1,0,"EDUBoard 1.0");
-	vDisplayWriteStringAtPos(2,0,"Template");
-	vDisplayWriteStringAtPos(3,0,"ResetReason: %d", reason);
+	eventGroup = xEventGroupCreate();
+	
 	vTaskStartScheduler();
+	
 	return 0;
 }
 
-void vLedBlink(void *pvParameters) {
-	(void) pvParameters;
-	PORTF.DIRSET = PIN0_bm; /*LED1*/
-	PORTF.OUT = 0x01;
+void vCalculateLeibniz(void *pvParameters) {
+	uint32_t i = 0;
+	pi4 = 1.0;
+	
+	for (;;) {
+		pi4 = pi4 - (1.0 / (3 + (4 * i))) + (1.0 / (5 + (4 * i)));
+		i++;
+	}
+}
+
+void vCalculateNilakantha(void *pvParameters) {
+	uint32_t i = 1;
+	pi4 = 3.0;
+	
 	for(;;) {
-// 		uint32_t stack = get_mem_unused();
-// 		uint32_t heap = xPortGetFreeHeapSize();
-// 		uint32_t taskStack = uxTaskGetStackHighWaterMark(ledTask);
-// 		vDisplayClear();
-// 		vDisplayWriteStringAtPos(0,0,"Stack: %d", stack);
-// 		vDisplayWriteStringAtPos(1,0,"Heap: %d", heap);
-// 		vDisplayWriteStringAtPos(2,0,"TaskStack: %d", taskStack);
-// 		vDisplayWriteStringAtPos(3,0,"FreeSpace: %d", stack+heap);
-		PORTF.OUTTGL = 0x01;				
-		vTaskDelay(100 / portTICK_RATE_MS);
+		// Check for reset
+		
+		pi4 = pi4 + (1 / ((2 * i) * (2 * i + 1) * (2 * i + 2)));
+		i++;
+		pi4 = pi4 - (1 / ((2 * i) * (2 * i + 1) * (2 * i + 2)));
+		i++;
 	}
 }
