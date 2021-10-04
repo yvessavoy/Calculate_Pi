@@ -28,10 +28,10 @@
 
 #include "rtos_buttonhandler.h"
 
-#define EG_START_CALC 0x01
-#define EG_STOP_CALC  0x02
-#define EG_RESET_CALC 0x04
-#define EG_S1_PRESSED 0x08
+#define EG_RUN_LEIB 0x04
+#define EG_RUN_NILA 0x08
+
+#define PI_5DECIMALS 3.14159
 
 typedef enum {
 	State_Started,
@@ -45,14 +45,16 @@ typedef enum {
 
 EventGroupHandle_t eventGroup;
 Algorithm_e algorithm = LEIBNIZ;
-TaskHandle_t calculationHandle;
+TaskHandle_t leibnizHandle;
+TaskHandle_t nilakanthaHandle;
 State_e state = State_Stopped;
 
-float pi4;
+float pi;
 
 extern void vApplicationIdleHook(void);
 void vCalculateLeibniz(void *pvParameters);
 void vCalculateNilakantha(void *pvParameters);
+void vInterface(void *pvParameters);
 void vButtonHandler(void *pvParameters);
 
 void vApplicationIdleHook(void) {}
@@ -63,11 +65,54 @@ int main(void) {
 	
 	eventGroup = xEventGroupCreate();
 	
+	xTaskCreate(vInterface, (const char *) "interface", configMINIMAL_STACK_SIZE + 50, NULL, 2, NULL);
 	xTaskCreate(vButtonHandler, (const char *) "buttonHandler", configMINIMAL_STACK_SIZE + 50, NULL, 2, NULL);
+	xTaskCreate(vCalculateLeibniz, (const char *) "calculateLeibniz", configMINIMAL_STACK_SIZE+10, NULL, 1, &leibnizHandle);
+	xTaskCreate(vCalculateNilakantha, (const char *) "calculateNilakantha", configMINIMAL_STACK_SIZE+10, NULL, 1, &nilakanthaHandle);
 	
 	vTaskStartScheduler();
 	
 	return 0;
+}
+
+void vInterface(void *pvParameters) {
+	char cPi[8];
+	
+	for(;;) {
+		vDisplayClear();
+		vDisplayWriteStringAtPos(0, 0, "Calculate PI");
+		
+		switch (state) {
+			case State_Started:
+				sprintf(cPi, "PI: %f", pi);
+				vDisplayWriteStringAtPos(1, 0, cPi);
+				vDisplayWriteStringAtPos(3, 0, "START STOP RST CHNG");
+				break;
+				
+			case State_Stopped:
+				switch (algorithm) {
+					case LEIBNIZ:
+						vDisplayWriteStringAtPos(1, 0, "Current: Leibniz");
+						break;
+						
+					case NILAKANTHA:
+						vDisplayWriteStringAtPos(1, 0, "Current: Nilakantha");
+						break;
+					
+					default:
+						vDisplayWriteStringAtPos(1, 0, "Current: None");
+						break;
+				}
+				
+				vDisplayWriteStringAtPos(3, 0, "START STOP RST CHNG");
+				break;
+				
+			default:
+				break;
+		}
+		
+		vTaskDelay(500/portTICK_RATE_MS);
+	}
 }
 
 void vButtonHandler(void *pvParameters) {
@@ -76,64 +121,80 @@ void vButtonHandler(void *pvParameters) {
 	setupButton(BUTTON2, &PORTF, 5, 1);
 	setupButton(BUTTON3, &PORTF, 6, 1);
 	setupButton(BUTTON4, &PORTF, 7, 1);
+	vTaskDelay(3000);
 	
-	// Start algorithm (means starting the correct calculation task)
-	if(getButtonState(BUTTON1, false) == buttonState_Short && state == State_Stopped) {
-		// We use one handle for both tasks as we only have one calculation running at any time
-		// which means that calculationHandle always points to the currently running calculation
-		if (algorithm == LEIBNIZ) {
-			xTaskCreate(vCalculateLeibniz, (const char *) "calculateLeibniz", configMINIMAL_STACK_SIZE+50, NULL, 1, &calculationHandle);
-		} else {
-			xTaskCreate(vCalculateNilakantha, (const char *) "calculateNilakantha", configMINIMAL_STACK_SIZE+50, NULL, 1, &calculationHandle);
+	for(;;) {
+		// Start algorithm (means resuming the correct calculation task)
+		if(getButtonState(BUTTON1, true) == buttonState_Short && state == State_Stopped) {
+			if (algorithm == LEIBNIZ) {
+				xEventGroupSetBits(eventGroup, EG_RUN_LEIB);
+			} else {
+				xEventGroupSetBits(eventGroup, EG_RUN_NILA);
+			}
+			
+			state = State_Started;
 		}
 		
-		state = State_Started;
-	}
-	
-	// Stop algorithm (means deleting the currently running calculation task)
-	if(getButtonState(BUTTON2, false) == buttonState_Short && state == State_Started) {
-		vTaskDelete(calculationHandle);
-		calculationHandle = NULL;
-		state = State_Stopped;
-	}
-	
-	// Reset algorithm (Nothing to do here as we initialize the algorithm as soon as it starts)
-	if(getButtonState(BUTTON3, false) == buttonState_Short && state == State_Stopped) {
-		
-	}
-	
-	// Change algorithm
-	if(getButtonState(BUTTON4, false) == buttonState_Short && state == State_Stopped) {
-		if (algorithm == LEIBNIZ) {
-			algorithm = NILAKANTHA;
-		} else {
-			algorithm = LEIBNIZ;
+		// Stop algorithm (means deleting the currently running calculation task)
+		if(getButtonState(BUTTON2, true) == buttonState_Short && state == State_Started) {
+			if (algorithm == LEIBNIZ) {
+				xEventGroupClearBits(eventGroup, EG_RUN_LEIB);
+			} else {
+				xEventGroupClearBits(eventGroup, EG_RUN_NILA);
+			}
+			state = State_Stopped;
 		}
+		
+		// Reset algorithm
+		if(getButtonState(BUTTON3, true) == buttonState_Short) {
+			
+		}
+		
+		// Change algorithm
+		if(getButtonState(BUTTON4, true) == buttonState_Short && state == State_Stopped) {
+			if (algorithm == LEIBNIZ) {
+				algorithm = NILAKANTHA;
+			} else {
+				algorithm = LEIBNIZ;
+			}
+		}
+		
+		vTaskDelay(10/portTICK_RATE_MS);
 	}
-	
-	vTaskDelay(10/portTICK_RATE_MS);
 }
 
 void vCalculateLeibniz(void *pvParameters) {
-	uint32_t i = 0;
-	pi4 = 1.0;
+	uint32_t i;
+	EventBits_t xEventGroupValue;
 	
 	for (;;) {
-		pi4 = pi4 - (1.0 / (3 + (4 * i))) + (1.0 / (5 + (4 * i)));
-		i++;
+		xEventGroupWaitBits(eventGroup, EG_RUN_LEIB, pdFALSE, pdTRUE, portMAX_DELAY);
+		pi = 4.0;
+		i = 0;
+	
+		// Exit the inner loop if EG_RUN_LEIB gets cleared
+		while(xEventGroupGetBits(eventGroup) & EG_RUN_LEIB) {
+			pi = pi - (4.0 / (3 + (4 * i))) + (4.0 / (5 + (4 * i)));
+			i++;
+		}
 	}
 }
 
 void vCalculateNilakantha(void *pvParameters) {
-	uint32_t i = 1;
-	pi4 = 3.0;
+	uint32_t i;
+	EventBits_t xEventGroupValue;
 	
 	for(;;) {
-		// Check for reset
+		xEventGroupWaitBits(eventGroup, EG_RUN_NILA, pdFALSE, pdTRUE, portMAX_DELAY);
+		pi = 3.0;
+		i = 1;
 		
-		pi4 = pi4 + (1 / ((2 * i) * (2 * i + 1) * (2 * i + 2)));
-		i++;
-		pi4 = pi4 - (1 / ((2 * i) * (2 * i + 1) * (2 * i + 2)));
-		i++;
+		// Exit the inner loop if EG_RUN_NILA gets cleared
+		while(xEventGroupGetBits(eventGroup) & EG_RUN_NILA) {
+			pi = pi + (4.0 / ((2 * i) * (2 * i + 1) * (2 * i + 2)));
+			i++;
+			pi = pi - (4.0 / ((2 * i) * (2 * i + 1) * (2 * i + 2)));
+			i++;
+		}
 	}
 }
