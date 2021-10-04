@@ -28,8 +28,9 @@
 
 #include "rtos_buttonhandler.h"
 
-#define EG_RUN_LEIB 0x04
-#define EG_RUN_NILA 0x08
+#define EG_RUN_LEIB  0x01
+#define EG_RUN_NILA  0x02
+#define EG_SKIP_CALC 0x04
 
 #define PI_5DECIMALS 3.14159
 
@@ -84,7 +85,14 @@ void vInterface(void *pvParameters) {
 		
 		switch (state) {
 			case State_Started:
+				// Temporarily skip calculation while fetching PI value
+				xEventGroupSetBits(eventGroup, EG_SKIP_CALC);
+				
 				sprintf(cPi, "PI: %f", pi);
+				
+				// Re-Enable calculation after fetching is complete
+				xEventGroupClearBits(eventGroup, EG_SKIP_CALC);
+				
 				vDisplayWriteStringAtPos(1, 0, cPi);
 				vDisplayWriteStringAtPos(3, 0, "START STOP RST CHNG");
 				break;
@@ -142,6 +150,7 @@ void vButtonHandler(void *pvParameters) {
 			} else {
 				xEventGroupClearBits(eventGroup, EG_RUN_NILA);
 			}
+			
 			state = State_Stopped;
 		}
 		
@@ -173,9 +182,16 @@ void vCalculateLeibniz(void *pvParameters) {
 		i = 0;
 	
 		// Exit the inner loop if EG_RUN_LEIB gets cleared
-		while(xEventGroupGetBits(eventGroup) & EG_RUN_LEIB) {
-			pi = pi - (4.0 / (3 + (4 * i))) + (4.0 / (5 + (4 * i)));
-			i++;
+		xEventGroupValue = xEventGroupGetBits(eventGroup);
+		while(xEventGroupValue & EG_RUN_LEIB) {
+			// If the display needs to fetch the current PI value, we stop
+			// the calculation temporarily to avoid incomplete float values
+			if ((xEventGroupValue & EG_SKIP_CALC) == 0) {
+				pi = pi - (4.0 / (3 + (4 * i))) + (4.0 / (5 + (4 * i)));
+				i++;
+			}
+			
+			xEventGroupValue = xEventGroupGetBits(eventGroup);
 		}
 	}
 }
@@ -190,11 +206,18 @@ void vCalculateNilakantha(void *pvParameters) {
 		i = 1;
 		
 		// Exit the inner loop if EG_RUN_NILA gets cleared
-		while(xEventGroupGetBits(eventGroup) & EG_RUN_NILA) {
-			pi = pi + (4.0 / ((2 * i) * (2 * i + 1) * (2 * i + 2)));
-			i++;
-			pi = pi - (4.0 / ((2 * i) * (2 * i + 1) * (2 * i + 2)));
-			i++;
+		xEventGroupValue = xEventGroupGetBits(eventGroup);
+		while(xEventGroupValue & EG_RUN_NILA) {
+			// If the display needs to fetch the current PI value, we stop
+			// the calculation temporarily to avoid incomplete float values
+			if ((xEventGroupValue & EG_SKIP_CALC) == 0) {
+				pi = pi + (4.0 / ((2 * i) * (2 * i + 1) * (2 * i + 2)));
+				i++;
+				pi = pi - (4.0 / ((2 * i) * (2 * i + 1) * (2 * i + 2)));
+				i++;
+			}
+		
+			xEventGroupValue = xEventGroupGetBits(eventGroup);
 		}
 	}
 }
