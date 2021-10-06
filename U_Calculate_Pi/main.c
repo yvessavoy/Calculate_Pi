@@ -43,12 +43,12 @@ typedef enum {
 
 typedef enum {
 	LEIBNIZ,
-	NILAKANTHA,
+	WALLIS,
 } Algorithm_e;
 
 Algorithm_e algorithm = LEIBNIZ;
 TaskHandle_t leibnizHandle;
-TaskHandle_t nilakanthaHandle;
+TaskHandle_t wallisHandle;
 TaskHandle_t timeHandle;
 State_e state = State_Stopped;
 
@@ -58,7 +58,7 @@ unsigned milliseconds;
 
 extern void vApplicationIdleHook(void);
 void vCalculateLeibniz(void *pvParameters);
-void vCalculateNilakantha(void *pvParameters);
+void vCalculateWallis(void *pvParameters);
 void vInterface(void *pvParameters);
 void vButtonHandler(void *pvParameters);
 void vTimeHandler(void *pvParameters);
@@ -87,7 +87,7 @@ int main(void) {
 	xTaskCreate(vButtonHandler, (const char *) "buttonHandler", configMINIMAL_STACK_SIZE + 50, NULL, 2, NULL);
 	xTaskCreate(vTimeHandler, (const char *) "timeHandler", configMINIMAL_STACK_SIZE + 50, NULL, 2, &timeHandle);
 	xTaskCreate(vCalculateLeibniz, (const char *) "calculateLeibniz", configMINIMAL_STACK_SIZE+10, NULL, 1, &leibnizHandle);
-	xTaskCreate(vCalculateNilakantha, (const char *) "calculateNilakantha", configMINIMAL_STACK_SIZE+10, NULL, 1, &nilakanthaHandle);
+	xTaskCreate(vCalculateWallis, (const char *) "calculateWallis", configMINIMAL_STACK_SIZE+10, NULL, 1, &wallisHandle);
 	
 	vTaskStartScheduler();
 	
@@ -141,9 +141,9 @@ void vInterface(void *pvParameters) {
 					sprintf(cPi, "PI: %0.8f", pi * 4);
 					xTaskNotify(leibnizHandle, N_CALC_START, eSetBits);
 				} else {
-					xTaskNotify(nilakanthaHandle, N_CALC_STOP, eSetBits);
+					xTaskNotify(wallisHandle, N_CALC_STOP, eSetBits);
 					sprintf(cPi, "PI: %0.8f", pi);
-					xTaskNotify(nilakanthaHandle, N_CALC_START, eSetBits);
+					xTaskNotify(wallisHandle, N_CALC_START, eSetBits);
 				}
 				
 				sprintf(cTime, "Time: %i.%is", seconds, milliseconds);
@@ -159,8 +159,8 @@ void vInterface(void *pvParameters) {
 						vDisplayWriteStringAtPos(1, 0, "Current: Leibniz");
 						break;
 						
-					case NILAKANTHA:
-						vDisplayWriteStringAtPos(1, 0, "Current: Nilakantha");
+					case WALLIS:
+						vDisplayWriteStringAtPos(1, 0, "Current: Wallis");
 						break;
 					
 					default:
@@ -193,7 +193,7 @@ void vButtonHandler(void *pvParameters) {
 			if (algorithm == LEIBNIZ) {
 				xTaskNotify(leibnizHandle, N_CALC_START | N_CALC_RST, eSetBits);
 			} else {
-				xTaskNotify(nilakanthaHandle, N_CALC_START | N_CALC_RST, eSetBits);
+				xTaskNotify(wallisHandle, N_CALC_START | N_CALC_RST, eSetBits);
 			}
 			
 			state = State_Started;
@@ -208,7 +208,7 @@ void vButtonHandler(void *pvParameters) {
 			if (algorithm == LEIBNIZ) {
 				xTaskNotify(leibnizHandle, N_CALC_STOP, eSetBits);
 			} else {
-				xTaskNotify(nilakanthaHandle, N_CALC_STOP, eSetBits);
+				xTaskNotify(wallisHandle, N_CALC_STOP, eSetBits);
 			}
 			
 			state = State_Stopped;
@@ -220,7 +220,7 @@ void vButtonHandler(void *pvParameters) {
 		// Change algorithm
 		if(getButtonState(BUTTON4, true) == buttonState_Short && state == State_Stopped) {
 			if (algorithm == LEIBNIZ) {
-				algorithm = NILAKANTHA;
+				algorithm = WALLIS;
 			} else {
 				algorithm = LEIBNIZ;
 			}
@@ -268,20 +268,18 @@ void vCalculateLeibniz(void *pvParameters) {
 	}
 }
 
-void vCalculateNilakantha(void *pvParameters) {
+void vCalculateWallis(void *pvParameters) {
 	BaseType_t xResult;
 	uint32_t ulNotifyValue;
-	uint32_t i = 2;
-	int s = 1;
+	uint32_t i = 3;
 	
 	for(;;) {
 		xResult = xTaskNotifyWait(pdFALSE, ULONG_MAX, &ulNotifyValue, portMAX_DELAY);
 		
 		if (xResult == pdPASS) {
 			if (ulNotifyValue & N_CALC_RST) {
-				pi = 3.0;
-				i = 2;
-				s = 1;
+				pi = 4.0;
+				i = 3;
 			}
 			
 			if (ulNotifyValue & N_CALC_START) {
@@ -294,8 +292,7 @@ void vCalculateNilakantha(void *pvParameters) {
 						break;
 					}
 					
-					pi = pi + s * (4.0 / (i * (i + 1) * (i + 2)));
-					s = -s;
+					pi = pi * ((i - 1.0) / i) * ((i + 1.0) / i);
 					i += 2;
 					
 					// If algorithm calculated PI up to 5 decimal places,
