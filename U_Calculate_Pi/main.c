@@ -6,6 +6,7 @@
  */ 
 
 #include <stdio.h>
+#include <limits.h>
 #include "avr_compiler.h"
 #include "pmic_driver.h"
 #include "TC_driver.h"
@@ -16,7 +17,6 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
-#include "event_groups.h"
 #include "stack_macros.h"
 
 #include "mem_check.h"
@@ -28,11 +28,11 @@
 
 #include "rtos_buttonhandler.h"
 
-#define EG_RUN_LEIB  (1 << 0)
-#define EG_RUN_NILA  (1 << 1)
-#define EG_SKIP_CALC (1 << 2)
-#define EG_TT		 (1 << 3)
-#define EG_RST_TIMER (1 << 4)
+#define N_TIME_TICK  (1 << 0)
+#define N_TIME_RST   (1 << 1)
+#define N_CALC_START (1 << 0)
+#define N_CALC_STOP  (1 << 1)
+#define N_CALC_RST   (1 << 2)
 
 #define PI_5DECIMALS 3.14159
 
@@ -46,15 +46,15 @@ typedef enum {
 	NILAKANTHA,
 } Algorithm_e;
 
-EventGroupHandle_t xEventGroup;
 Algorithm_e algorithm = LEIBNIZ;
 TaskHandle_t leibnizHandle;
 TaskHandle_t nilakanthaHandle;
+TaskHandle_t timeHandle;
 State_e state = State_Stopped;
 
 float pi;
-int seconds;
-int milliseconds;
+unsigned seconds;
+unsigned milliseconds;
 
 extern void vApplicationIdleHook(void);
 void vCalculateLeibniz(void *pvParameters);
@@ -64,7 +64,7 @@ void vButtonHandler(void *pvParameters);
 void vTimeHandler(void *pvParameters);
 
 ISR(TCC1_OVF_vect) {
-	xEventGroupSetBitsFromISR(xEventGroup, EG_TT, pdFALSE);
+	xTaskNotifyFromISR(timeHandle, N_TIME_TICK, eSetBits, pdFALSE);
 }
 
 void vApplicationIdleHook(void) {}
@@ -83,11 +83,9 @@ int main(void) {
 	vInitDisplay();
 	vInitTimer();
 	
-	xEventGroup = xEventGroupCreate();
-	
 	xTaskCreate(vInterface, (const char *) "interface", configMINIMAL_STACK_SIZE + 50, NULL, 2, NULL);
 	xTaskCreate(vButtonHandler, (const char *) "buttonHandler", configMINIMAL_STACK_SIZE + 50, NULL, 2, NULL);
-	xTaskCreate(vTimeHandler, (const char *) "timeHandler", configMINIMAL_STACK_SIZE + 50, NULL, 2, NULL);
+	xTaskCreate(vTimeHandler, (const char *) "timeHandler", configMINIMAL_STACK_SIZE + 50, NULL, 2, &timeHandle);
 	xTaskCreate(vCalculateLeibniz, (const char *) "calculateLeibniz", configMINIMAL_STACK_SIZE+10, NULL, 1, &leibnizHandle);
 	xTaskCreate(vCalculateNilakantha, (const char *) "calculateNilakantha", configMINIMAL_STACK_SIZE+10, NULL, 1, &nilakanthaHandle);
 	
@@ -98,26 +96,31 @@ int main(void) {
 
 void vTimeHandler(void *pvParameters) {
 	int i = 0;
+	BaseType_t xResult;
+	uint32_t ulNotifyValue;
 	seconds = 0;
 	milliseconds = 0;
 	
 	for (;;) {
-		xEventGroupWaitBits(xEventGroup, EG_TT, pdTRUE, pdTRUE, portMAX_DELAY);
+		xResult = xTaskNotifyWait(pdFALSE, N_TIME_TICK | N_TIME_RST, &ulNotifyValue, portMAX_DELAY);
 		
-		// Check if time reset is requested
-		if (xEventGroupClearBits(xEventGroup, EG_RST_TIMER) & EG_RST_TIMER) {
-			i = 0;
-			seconds = 0;
-			milliseconds = 0;
-		}
-		
-		if (i < 100) {
-			milliseconds += 10;
-			i++;
-		} else {
-			seconds++;
-			milliseconds = 0;
-			i = 0;
+		if (xResult == pdPASS) {
+			if (ulNotifyValue & N_TIME_RST) {
+				i = 0;
+				seconds = 0;
+				milliseconds = 0;
+			}
+			
+			if (ulNotifyValue & N_TIME_TICK) {
+				if (i < 100) {
+					milliseconds += 10;
+					i++;
+				} else {
+					seconds++;
+					milliseconds = 0;
+					i = 0;
+				}
+			}
 		}
 	}
 }
@@ -132,17 +135,16 @@ void vInterface(void *pvParameters) {
 		
 		switch (state) {
 			case State_Started:
-				// Temporarily skip calculation while fetching PI value and time
-				xEventGroupSetBits(xEventGroup, EG_SKIP_CALC);
-				
+				// Temporarily skip calculation while fetching PI value
 				if (algorithm == LEIBNIZ) {
+					xTaskNotify(leibnizHandle, N_CALC_STOP, eSetBits);
 					sprintf(cPi, "PI: %0.8f", pi * 4);
+					xTaskNotify(leibnizHandle, N_CALC_START, eSetBits);
 				} else {
+					xTaskNotify(nilakanthaHandle, N_CALC_STOP, eSetBits);
 					sprintf(cPi, "PI: %0.8f", pi);
+					xTaskNotify(nilakanthaHandle, N_CALC_START, eSetBits);
 				}
-				
-				// Re-Enable calculation after fetching is complete
-				xEventGroupClearBits(xEventGroup, EG_SKIP_CALC);
 				
 				sprintf(cTime, "Time: %i.%is", seconds, milliseconds);
 				
@@ -189,35 +191,30 @@ void vButtonHandler(void *pvParameters) {
 		// Start algorithm (means resuming the correct calculation task)
 		if(getButtonState(BUTTON1, true) == buttonState_Short && state == State_Stopped) {
 			if (algorithm == LEIBNIZ) {
-				xEventGroupSetBits(xEventGroup, EG_RUN_LEIB);
+				xTaskNotify(leibnizHandle, N_CALC_START | N_CALC_RST, eSetBits);
 			} else {
-				xEventGroupSetBits(xEventGroup, EG_RUN_NILA);
+				xTaskNotify(nilakanthaHandle, N_CALC_START | N_CALC_RST, eSetBits);
 			}
 			
 			state = State_Started;
 			
-			// Start HW-Timer
+			// Reset and start HW-Timer
+			xTaskNotify(timeHandle, N_TIME_RST, eSetBits);
 			TCC1.CTRLA = TC_CLKSEL_DIV64_gc;
 		}
 		
 		// Stop algorithm (means deleting the currently running calculation task)
 		if(getButtonState(BUTTON2, true) == buttonState_Short && state == State_Started) {
 			if (algorithm == LEIBNIZ) {
-				xEventGroupClearBits(xEventGroup, EG_RUN_LEIB);
+				xTaskNotify(leibnizHandle, N_CALC_STOP, eSetBits);
 			} else {
-				xEventGroupClearBits(xEventGroup, EG_RUN_NILA);
+				xTaskNotify(nilakanthaHandle, N_CALC_STOP, eSetBits);
 			}
 			
 			state = State_Stopped;
 			
 			// Stop HW-Timer
 			TCC1.CTRLA = 0x00;
-			xEventGroupSetBits(xEventGroup, EG_RST_TIMER);
-		}
-		
-		// Reset algorithm
-		if(getButtonState(BUTTON3, true) == buttonState_Short) {
-			
 		}
 		
 		// Change algorithm
@@ -234,67 +231,81 @@ void vButtonHandler(void *pvParameters) {
 }
 
 void vCalculateLeibniz(void *pvParameters) {
-	uint32_t i;
-	EventBits_t xEventGroupValue;
+	uint32_t i = 0;
+	BaseType_t xResult;
+	uint32_t ulNotifyValue;
 	
 	for (;;) {
-		xEventGroupWaitBits(xEventGroup, EG_RUN_LEIB, pdFALSE, pdTRUE, portMAX_DELAY);
-		pi = 1.0;
-		i = 0;
+		xResult = xTaskNotifyWait(pdFALSE, ULONG_MAX, &ulNotifyValue, portMAX_DELAY);
 	
-		xEventGroupValue = xEventGroupGetBits(xEventGroup);
-		
-		// Exit the inner loop if EG_RUN_LEIB gets cleared
-		while(xEventGroupValue & EG_RUN_LEIB) {
-			// If the display needs to fetch the current PI value, we stop
-			// the calculation temporarily to avoid incomplete float values
-			if ((xEventGroupValue & EG_SKIP_CALC) == 0) {
-				pi = pi - (1.0 / (3 + (4 * i))) + (1.0 / (5 + (4 * i)));
-				i++;
-				
-				// If algorithm calculated PI up to 5 decimal places,
-				// stop the timer
-				if ((pi * 4) - PI_5DECIMALS < 0.00001) {
-					TCC1.CTRLA = 0x00;
-					xEventGroupSetBits(xEventGroup, EG_RST_TIMER);
-				}
+		if (xResult == pdPASS) {
+			if (ulNotifyValue & N_CALC_RST) {
+				pi = 1.0;
+				i = 0;
 			}
 			
-			xEventGroupValue = xEventGroupGetBits(xEventGroup);
+			if (ulNotifyValue & N_CALC_START) {
+				for (;;) {
+					// Check if the calculation got interrupted (probably by the display task)
+					// and send an "empty" notification. This will cause this task to run once
+					// more without actually doing anything, but this is alright for the case
+					xTaskNotifyAndQuery(xTaskGetCurrentTaskHandle(), 0, eNoAction, &ulNotifyValue);
+					if (ulNotifyValue & N_CALC_STOP) {
+						break;
+					}
+					
+					pi = pi - (1.0 / (3 + (4 * i))) + (1.0 / (5 + (4 * i)));
+					i++;
+					
+					// If algorithm calculated PI up to 5 decimal places,
+					// stop the timer
+					if ((pi * 4) - PI_5DECIMALS < 0.00001) {
+						TCC1.CTRLA = 0x00;
+					}
+				}
+			}
 		}
 	}
 }
 
 void vCalculateNilakantha(void *pvParameters) {
-	uint32_t i;
-	EventBits_t xEventGroupValue;
+	BaseType_t xResult;
+	uint32_t ulNotifyValue;
+	uint32_t i = 2;
+	int s = 1;
 	
 	for(;;) {
-		xEventGroupWaitBits(xEventGroup, EG_RUN_NILA, pdFALSE, pdTRUE, portMAX_DELAY);
-		pi = 3.0;
-		i = 1;
+		xResult = xTaskNotifyWait(pdFALSE, ULONG_MAX, &ulNotifyValue, portMAX_DELAY);
 		
-		xEventGroupValue = xEventGroupGetBits(xEventGroup);
-		
-		// Exit the inner loop if EG_RUN_NILA gets cleared
-		while(xEventGroupValue & EG_RUN_NILA) {
-			// If the display needs to fetch the current PI value, we stop
-			// the calculation temporarily to avoid incomplete float values
-			if ((xEventGroupValue & EG_SKIP_CALC) == 0) {
-				pi = pi + (4.0 / ((2 * i) * (2 * i + 1) * (2 * i + 2)));
-				i++;
-				pi = pi - (4.0 / ((2 * i) * (2 * i + 1) * (2 * i + 2)));
-				i++;
-				
-				// If algorithm calculated PI up to 5 decimal places,
-				// stop the timer
-				if (pi - PI_5DECIMALS < 0.00001) {
-					TCC1.CTRLA = 0x00;
-					xEventGroupSetBits(xEventGroup, EG_RST_TIMER);
+		if (xResult == pdPASS) {
+			if (ulNotifyValue & N_CALC_RST) {
+				pi = 3.0;
+				i = 2;
+				s = 1;
+			}
+			
+			if (ulNotifyValue & N_CALC_START) {
+				for (;;) {
+					// Check if the calculation got interrupted (probably by the display task)
+					// and send an "empty" notification. This will cause this task to run once
+					// more without actually doing anything, but this is alright for the case
+					xTaskNotifyAndQuery(xTaskGetCurrentTaskHandle(), 0, eNoAction, &ulNotifyValue);
+					if (ulNotifyValue & N_CALC_STOP) {
+						break;
+					}
+					
+					pi = pi + s * (4.0 / (i * (i + 1) * (i + 2)));
+					s = -s;
+					i += 2;
+					
+					// If algorithm calculated PI up to 5 decimal places,
+					// stop the timer
+					float rest = pi - PI_5DECIMALS;
+					if (rest < 0.00001 && rest > 0.0) {
+						TCC1.CTRLA = 0x00;
+					}
 				}
 			}
-		
-			xEventGroupValue = xEventGroupGetBits(xEventGroup);
 		}
 	}
 }
