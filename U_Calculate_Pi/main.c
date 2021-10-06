@@ -150,7 +150,7 @@ void vInterface(void *pvParameters) {
 				
 				vDisplayWriteStringAtPos(1, 0, cPi);
 				vDisplayWriteStringAtPos(2, 0, cTime);
-				vDisplayWriteStringAtPos(3, 0, "START STOP RST CHNG");
+				vDisplayWriteStringAtPos(3, 0, "START STOP     CHNG");
 				break;
 				
 			case State_Stopped:
@@ -168,7 +168,7 @@ void vInterface(void *pvParameters) {
 						break;
 				}
 				
-				vDisplayWriteStringAtPos(3, 0, "START STOP RST CHNG");
+				vDisplayWriteStringAtPos(3, 0, "START STOP     CHNG");
 				break;
 				
 			default:
