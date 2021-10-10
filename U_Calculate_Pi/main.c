@@ -17,6 +17,7 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
+#include "event_groups.h"
 #include "stack_macros.h"
 
 #include "mem_check.h"
@@ -33,6 +34,7 @@
 #define N_CALC_START (1 << 0)
 #define N_CALC_STOP  (1 << 1)
 #define N_CALC_RST   (1 << 2)
+#define EG_CALC_RELEASED (1 << 0)
 
 #define PI_5DECIMALS 3.14159
 
@@ -51,6 +53,7 @@ TaskHandle_t leibnizHandle;
 TaskHandle_t wallisHandle;
 TaskHandle_t timeHandle;
 State_e state = State_Stopped;
+EventGroupHandle_t xEventGroup;
 
 float pi;
 unsigned seconds;
@@ -82,6 +85,8 @@ int main(void) {
 	vInitClock();
 	vInitDisplay();
 	vInitTimer();
+	
+	xEventGroup = xEventGroupCreate();
 	
 	xTaskCreate(vInterface, (const char *) "interface", configMINIMAL_STACK_SIZE + 50, NULL, 2, NULL);
 	xTaskCreate(vButtonHandler, (const char *) "buttonHandler", configMINIMAL_STACK_SIZE + 50, NULL, 2, NULL);
@@ -128,6 +133,9 @@ void vTimeHandler(void *pvParameters) {
 void vInterface(void *pvParameters) {
 	char cPi[15];
 	char cTime[14];
+	TickType_t xLastWakeTime;
+	const TickType_t xFrequency = 500 / portTICK_RATE_MS;
+	xLastWakeTime = xTaskGetTickCount();
 	
 	for(;;) {
 		vDisplayClear();
@@ -135,15 +143,13 @@ void vInterface(void *pvParameters) {
 		
 		switch (state) {
 			case State_Started:
-				// Temporarily skip calculation while fetching PI value
+				// Wait for PI to be released from the calculation task
+				xEventGroupWaitBits(xEventGroup, EG_CALC_RELEASED, pdTRUE, pdTRUE, portMAX_DELAY);
+				
 				if (algorithm == LEIBNIZ) {
-					xTaskNotify(leibnizHandle, N_CALC_STOP, eSetBits);
 					sprintf(cPi, "PI: %0.8f", pi * 4);
-					xTaskNotify(leibnizHandle, N_CALC_START, eSetBits);
 				} else {
-					xTaskNotify(wallisHandle, N_CALC_STOP, eSetBits);
 					sprintf(cPi, "PI: %0.8f", pi);
-					xTaskNotify(wallisHandle, N_CALC_START, eSetBits);
 				}
 				
 				sprintf(cTime, "Time: %i.%is", seconds, milliseconds);
@@ -175,7 +181,7 @@ void vInterface(void *pvParameters) {
 				break;
 		}
 		
-		vTaskDelay(500/portTICK_RATE_MS);
+		vTaskDelayUntil(&xLastWakeTime, xFrequency);
 	}
 }
 
@@ -254,8 +260,14 @@ void vCalculateLeibniz(void *pvParameters) {
 						break;
 					}
 					
+					// Lock pi (like taking a mutex)
+					xEventGroupClearBits(xEventGroup, EG_CALC_RELEASED);
+					
 					pi = pi - (1.0 / (3 + (4 * i))) + (1.0 / (5 + (4 * i)));
 					i++;
+					
+					// Release pi (like releasing a mutex)
+					xEventGroupSetBits(xEventGroup, EG_CALC_RELEASED);
 					
 					// If algorithm calculated PI up to 5 decimal places,
 					// stop the timer
@@ -271,7 +283,7 @@ void vCalculateLeibniz(void *pvParameters) {
 void vCalculateWallis(void *pvParameters) {
 	BaseType_t xResult;
 	uint32_t ulNotifyValue;
-	uint32_t i = 3;
+	float i = 3;
 	
 	for(;;) {
 		xResult = xTaskNotifyWait(pdFALSE, ULONG_MAX, &ulNotifyValue, portMAX_DELAY);
@@ -279,7 +291,7 @@ void vCalculateWallis(void *pvParameters) {
 		if (xResult == pdPASS) {
 			if (ulNotifyValue & N_CALC_RST) {
 				pi = 4.0;
-				i = 3;
+				i = 3.0;
 			}
 			
 			if (ulNotifyValue & N_CALC_START) {
@@ -291,9 +303,15 @@ void vCalculateWallis(void *pvParameters) {
 					if (ulNotifyValue & N_CALC_STOP) {
 						break;
 					}
+				
+					// Lock pi (like taking a mutex)
+					xEventGroupClearBits(xEventGroup, EG_CALC_RELEASED);
 					
-					pi = pi * ((i - 1.0) / i) * ((i + 1.0) / i);
+					pi = pi * ((i - 1) / i) * ((i + 1) / i);
 					i += 2;
+					
+					// Release pi (like releasing a mutex)
+					xEventGroupSetBits(xEventGroup, EG_CALC_RELEASED);
 					
 					// If algorithm calculated PI up to 5 decimal places,
 					// stop the timer
