@@ -36,7 +36,8 @@
 #define N_CALC_RST   (1 << 2)
 #define EG_CALC_RELEASED (1 << 0)
 
-#define PI_5DECIMALS 3.14159
+#define PI_5DECIMALS        3.14159
+#define INTERRUPT_PERIOD_MS 10
 
 typedef enum {
 	State_Started,
@@ -56,7 +57,6 @@ State_e state = State_Stopped;
 EventGroupHandle_t xEventGroup;
 
 float pi;
-unsigned seconds;
 unsigned milliseconds;
 
 extern void vApplicationIdleHook(void);
@@ -78,7 +78,7 @@ void vInitTimer() {
 	TCC1.CTRLA = 0x00;
 	TCC1.CTRLB = 0x00;
 	TCC1.INTCTRLA = 0x03;
-	TCC1.PER = 5000;
+	TCC1.PER = 500 * INTERRUPT_PERIOD_MS;
 }
 
 int main(void) {
@@ -100,10 +100,8 @@ int main(void) {
 }
 
 void vTimeHandler(void *pvParameters) {
-	int i = 0;
 	BaseType_t xResult;
 	uint32_t ulNotifyValue;
-	seconds = 0;
 	milliseconds = 0;
 	
 	for (;;) {
@@ -111,20 +109,11 @@ void vTimeHandler(void *pvParameters) {
 		
 		if (xResult == pdPASS) {
 			if (ulNotifyValue & N_TIME_RST) {
-				i = 0;
-				seconds = 0;
 				milliseconds = 0;
 			}
 			
 			if (ulNotifyValue & N_TIME_TICK) {
-				if (i < 100) {
-					milliseconds += 10;
-					i++;
-				} else {
-					seconds++;
-					milliseconds = 0;
-					i = 0;
-				}
+				milliseconds += INTERRUPT_PERIOD_MS;
 			}
 		}
 	}
@@ -152,7 +141,7 @@ void vInterface(void *pvParameters) {
 					sprintf(cPi, "PI: %0.8f", pi);
 				}
 				
-				sprintf(cTime, "Time: %i.%is", seconds, milliseconds);
+				sprintf(cTime, "Time: %ims", milliseconds);
 				
 				vDisplayWriteStringAtPos(1, 0, cPi);
 				vDisplayWriteStringAtPos(2, 0, cTime);
