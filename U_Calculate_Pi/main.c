@@ -37,7 +37,7 @@
 #define EG_CALC_RELEASED (1 << 0)
 
 #define PI_5DECIMALS        3.14159
-#define INTERRUPT_PERIOD_MS 10
+#define INTERRUPT_PERIOD_MS 5
 
 typedef enum {
 	State_Started,
@@ -106,7 +106,6 @@ void vTimeHandler(void *pvParameters) {
 	
 	for (;;) {
 		xResult = xTaskNotifyWait(pdFALSE, N_TIME_TICK | N_TIME_RST, &ulNotifyValue, portMAX_DELAY);
-		
 		if (xResult == pdPASS) {
 			if (ulNotifyValue & N_TIME_RST) {
 				milliseconds = 0;
